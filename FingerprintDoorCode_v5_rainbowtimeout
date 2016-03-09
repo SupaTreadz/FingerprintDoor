@@ -1,0 +1,458 @@
+#include <Servo.h>
+#include <Adafruit_NeoPixel.h>
+#include <Adafruit_Fingerprint.h>
+#if ARDUINO >= 100
+ #include <SoftwareSerial.h>
+#else
+ #include <NewSoftSerial.h>
+#endif
+#define PIN 6
+
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(24, 6, NEO_GRB + NEO_KHZ800);
+
+// pin #2 is IN from sensor (GREEN wire)
+// pin #3 is OUT from arduino  (WHITE wire)
+#if ARDUINO >= 100
+SoftwareSerial mySerial(4, 5);
+#else
+NewSoftSerial mySerial(4, 5);
+#endif
+
+Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
+
+Servo lockServo;  // create servo object to control a servo
+boolean timeout = false;
+unsigned long starttime = 0; //this variable will keep track of the time through calls to the millis() function
+boolean verified = false;
+boolean attachServo = true;
+boolean servoJustAttached = false;
+int count = 0;
+int i = 3; 
+int pos = 0;    // variable to store the servo position
+int buttonCount = 1;
+int buttonApin = 8; 
+int buttonBpin = 10;
+int buttonState = 0;
+int buttonState2 = 0;
+boolean doorLocked = true;
+boolean buttonChanged = false;
+//-----------------------------------------------------------------------------------------------------------------
+void setup()
+{
+  Serial.begin(9600);
+  pinMode(buttonApin, INPUT_PULLUP);
+  pinMode(buttonBpin, INPUT_PULLUP);
+  finger.begin(57600);
+  strip.begin(); 
+  strip.show(); // Initialize all pixels to 'off'
+  lockServo.attach(9);  // attaches the servo on pin 9 to the servo object
+  lockServo.write(0);
+  doorLocked = true;
+  strip.setBrightness(100);
+  colorWipe(strip.Color(255, 255, 255), 50); // White startup
+  delay(1000);
+  blankStrip();
+  starttime = millis();
+}
+//-----------------------------------------------------------------------------------------------------------------
+void loop()
+{
+
+  if((millis()-starttime) > 900000)
+  {
+    timeout = true;
+  }
+  else
+  {
+    timeout = false;
+  }
+  
+  buttonState = digitalRead(buttonApin);
+  buttonState2 = digitalRead(buttonBpin);
+  uint8_t ID = -1;
+  buttonCount = buttonCheck(buttonState,buttonCount);
+  if(buttonCount==1)
+  {
+    if(attachServo)
+    {
+      lockServo.detach();
+      Serial.println("Detached servo");
+      attachServo = false;
+    }
+    Serial.println("Rainbow");
+    if(!timeout)
+    {
+      rainbow(20);
+    }
+    else
+    {
+      Serial.println("timeout");
+    }
+    
+  }
+  if(buttonCount==2)
+  {
+    verified = false;
+    i = 1;
+    while(i <= 5)
+    {
+      Serial.print("Beginning Verification - Attempt #");
+      Serial.println(i);
+      blankStrip();
+      scanStrip(strip.Color(0,0,255),30);
+      delay(500);
+      verified = getFingerprintIDez();
+      if(verified==true)
+      {
+        blankStrip();
+        flash(strip.Color(0,255,0));
+        blankStrip();
+        unlock();
+        lockCountdown(500);
+        lock();
+        verified = false;
+        break;
+        i = 6;
+        count = 0;
+      }
+      else
+      {
+        blankStrip();
+        flash(strip.Color(255,0,0));
+        delay(250);
+        blankStrip();
+        i += 1;
+      }
+      verified = false;
+      blankStrip();
+    }
+    buttonCount = 1;
+  }
+}
+//-----------------------------------------------------------------------------------------------------------------
+void lock()
+{
+  lockServo.attach(9);
+  lockServo.write(0);
+  Serial.println("Attached servo");
+  Serial.println("Locked - in method");
+  colorWipe(strip.Color(128, 0, 128), 40); // Purple
+  doorLocked = true;
+  blankStrip();
+  lockServo.detach();
+  delay(1000);
+}
+//-----------------------------------------------------------------------------------------------------------------
+void unlock()
+{
+  lockServo.attach(9);
+  lockServo.write(90);
+  colorWipeReverse(strip.Color(255, 165, 0), 40); // Orange
+  doorLocked = false; 
+  blankStrip();
+  lockServo.detach();
+  delay(1000);
+}
+//-----------------------------------------------------------------------------------------------------------------
+void flash(uint32_t c)
+{
+  allSet(c);
+  delay(100);
+  allSet(strip.Color(0, 0, 0));
+  delay(100);
+  allSet(c);
+  delay(100);
+  allSet(strip.Color(0, 0, 0));
+  delay(100);
+  allSet(c);
+  delay(100);
+  allSet(strip.Color(0, 0, 0));
+  delay(100);
+}
+//-----------------------------------------------------------------------------------------------------------------
+void colorWipe(uint32_t c, uint8_t wait) 
+{
+  for(uint16_t i=0; i<strip.numPixels(); i++) 
+  {
+    strip.setPixelColor(i, c);
+    strip.show();
+    delay(wait);
+  }
+}
+//-----------------------------------------------------------------------------------------------------------------
+void colorWipeReverse(uint32_t c, uint8_t wait) 
+{
+  for(uint16_t i=0; i<strip.numPixels(); i++) 
+  {
+    strip.setPixelColor(23-i, c);
+    strip.show();
+    delay(wait);
+  }
+}  
+//-----------------------------------------------------------------------------------------------------------------
+void rainbow(uint8_t wait) 
+{
+  int buttonOld = buttonCount;
+  uint16_t i, j;
+  for(j=0; j<256; j++) 
+  {
+    for(i=0; i<strip.numPixels(); i++) 
+    {
+      strip.setPixelColor(i, Wheel((i+j) & 255));
+      buttonState = digitalRead(buttonApin);
+      buttonState2 = digitalRead(buttonBpin);
+      buttonCount = buttonCheck(buttonState,buttonCount);
+      if(buttonState2 == LOW)
+      {
+        unlock(); 
+        lockCountdown(500);
+        lock();
+        break;
+      }
+      if(buttonOld != buttonCount)
+      {
+        break;
+      }
+    }
+    if(buttonOld != buttonCount)
+    {
+      break;
+    }
+    strip.setBrightness(100);
+    strip.show();
+    delay(wait);
+  }
+}
+//-----------------------------------------------------------------------------------------------------------------
+uint32_t Wheel(byte WheelPos) 
+{
+  if(WheelPos < 85) 
+  {
+    return strip.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
+  }
+  else if(WheelPos < 170) 
+  {
+    WheelPos -= 85;
+    return strip.Color(255 - WheelPos * 3, 0, WheelPos * 3);
+  }
+  else
+  {
+    WheelPos -= 170;
+    return strip.Color(0, WheelPos * 3, 255 - WheelPos * 3);
+  }
+}
+//-----------------------------------------------------------------------------------------------------------------
+void allSet(uint32_t c)
+{
+  for(uint16_t i=0; i<strip.numPixels(); i++) 
+  {
+      strip.setPixelColor(i, c);
+  }
+  strip.show(); 
+}
+//-----------------------------------------------------------------------------------------------------------------
+boolean getFingerprintID() 
+{
+  uint8_t p = finger.getImage();
+  switch (p) 
+  {
+    case FINGERPRINT_OK:
+      Serial.println("Image taken");
+      break;
+    case FINGERPRINT_NOFINGER:
+      Serial.println("No finger detected");
+      return false;
+    case FINGERPRINT_PACKETRECIEVEERR:
+      Serial.println("Communication error");
+      return false;
+    case FINGERPRINT_IMAGEFAIL:
+      Serial.println("Imaging error");
+      return false;
+    default:
+      Serial.println("Unknown error");
+      return false;
+  }
+  // OK success!
+  p = finger.image2Tz();
+  switch (p) 
+  {
+    case FINGERPRINT_OK:
+      Serial.println("Image converted");
+      break;
+    case FINGERPRINT_IMAGEMESS:
+      Serial.println("Image too messy");
+      return false;
+    case FINGERPRINT_PACKETRECIEVEERR:
+      Serial.println("Communication error");
+      return false;
+    case FINGERPRINT_FEATUREFAIL:
+      Serial.println("Could not find fingerprint features");
+      return false;
+    case FINGERPRINT_INVALIDIMAGE:
+      Serial.println("Could not find fingerprint features");
+      return false;
+    default:
+      Serial.println("Unknown error");
+      return false;
+  }
+  // OK converted!
+  p = finger.fingerFastSearch();
+  if (p == FINGERPRINT_OK) 
+  {
+    Serial.println("Found a print match!");
+  } 
+  else if (p == FINGERPRINT_PACKETRECIEVEERR) 
+  {
+    Serial.println("Communication error");
+    return false;
+  } 
+  else if (p == FINGERPRINT_NOTFOUND) 
+  {
+    Serial.println("Did not find a match");
+    return false;
+  } 
+  else 
+  {
+    Serial.println("Unknown error");
+    return false;
+  }
+  // found a match!
+  
+  Serial.print("Found ID #"); Serial.print(finger.fingerID); 
+  Serial.print(" with confidence of "); Serial.println(finger.confidence); 
+  return true;
+}
+boolean getFingerprintIDez() //change boolean to int if I want to check fingerprint IDs rather than just verified or not
+{
+  uint8_t p = finger.getImage();
+  if (p != FINGERPRINT_OK)
+  {
+    Serial.println("getImage error");
+    return false; //change false to -1 if checking IDs
+  }  
+  p = finger.image2Tz();
+  if (p != FINGERPRINT_OK)
+  {
+    Serial.println("getImage2Tz error");
+    return false; //change false to -1 if checking IDs
+  }
+  p = finger.fingerFastSearch();
+  if (p != FINGERPRINT_OK)
+  {
+    Serial.println("fast Search error");
+    return false; //change false to -1 if checking IDs
+  }
+  // found a match!
+  Serial.print("Found ID #"); Serial.print(finger.fingerID); 
+  Serial.print(" with confidence of "); Serial.println(finger.confidence);
+  //return finger.fingerID; //use this return if I want to know the ID of the finger, otherwise just return true
+  return true;
+}
+//-----------------------------------------------------------------------------------------------------------------
+int buttonCheck(int buttonState, int buttonCount)
+{
+  int buttonCount2 = buttonCount;
+  if(buttonState == LOW)
+  {
+    if(buttonCount == 2)
+    {
+       buttonCount2 = 1;
+    }
+    else
+    {
+      buttonCount2 += 1;
+    }
+  }
+  return buttonCount2;
+}
+//-----------------------------------------------------------------------------------------------------------------
+void halfSet(uint32_t c, uint32_t c2)
+{
+  int num = strip.numPixels();
+  for(uint16_t i=0; i<(num/2); i++) 
+  {
+      strip.setPixelColor(i, c);
+  }
+  for(uint16_t i=(num/2);i<num; i++) 
+  {
+      strip.setPixelColor(i, c2);
+  }
+ strip.show(); 
+}
+//-----------------------------------------------------------------------------------------------------------------
+//LED function
+void standbyFlash(uint32_t c, uint8_t wait)
+{
+  blankStrip();
+  delay(500);
+  strip.setPixelColor(0,c);
+  strip.setPixelColor(6,c);
+  strip.setPixelColor(12,c);
+  strip.setPixelColor(18,c);
+  strip.show();
+  delay(500);
+  blankStrip();
+  delay(500);
+  strip.setPixelColor(0,c);
+  strip.setPixelColor(6,c);
+  strip.setPixelColor(12,c);
+  strip.setPixelColor(18,c);
+  strip.show();
+  delay(500);
+}
+//-----------------------------------------------------------------------------------------------------------------
+//turns off LEDs
+void blankStrip()
+{
+  allSet(strip.Color(0, 0, 0));
+}
+//-----------------------------------------------------------------------------------------------------------------
+//LED function
+void scanStrip(uint32_t c, uint8_t wait) 
+{
+  for(uint16_t i=0; i<strip.numPixels(); i++) 
+  {
+      strip.setPixelColor(i, c);
+      if(i==0)
+      {
+        strip.setPixelColor(strip.numPixels()-1, strip.Color(0,0,0));
+      }
+      else
+      {
+        strip.setPixelColor(i-1, strip.Color(0,0,0));
+      }
+      strip.show();
+      delay(wait);
+  }
+}
+//-----------------------------------------------------------------------------------------------------------------
+//sets the time until the door autolocks
+void lockCountdown(uint8_t wait) 
+{
+  for(uint16_t i=0; i<strip.numPixels(); i++) 
+  {
+  //if either external or internal button is pressed, countdown aborts
+    if(digitalRead(buttonApin) == LOW)
+    {
+      lock();
+      break;
+    }
+    if(digitalRead(buttonBpin) == LOW)
+    {
+      lock();
+      break;
+    }
+    strip.setPixelColor(i, strip.Color(255,0,0));
+    if(i==0)
+    {
+      strip.setPixelColor(strip.numPixels()-1, strip.Color(0,0,0));
+    }
+    else
+    {
+      strip.setPixelColor(i-1, strip.Color(0,0,0));
+    }
+    strip.show();
+    delay(wait);
+  }
+}
+//-----------------------------------------------------------------------------------------------------------------
